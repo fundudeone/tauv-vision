@@ -14,9 +14,9 @@ class CameraPublisher(Node):
         super().__init__('camera_publisher')
 
         # publishers for each stream
-        self.pub_rgb = self.create_publisher(Image, 'vision/camera/rgb', 1)
-        self.pub_left = self.create_publisher(Image, 'vision/camera/left', 1)
-        self.pub_right = self.create_publisher(Image, 'vision/camera/right', 1)
+        self.pub_rgb = self.create_publisher(Image, 'vision/camera/rgb', qos_profile_sensor_data)
+        self.pub_left = self.create_publisher(Image, 'vision/camera/left', qos_profile_sensor_data)
+        self.pub_right = self.create_publisher(Image, 'vision/camera/right', qos_profile_sensor_data)
         
         self.bridge = CvBridge()
 
@@ -56,25 +56,40 @@ def main(args=None):
             cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
         else:
             cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+
+        enc_rgb = pipeline.create(dai.node.VideoEncoder)
+        enc_rgb.setDefaultProfilePreset(target_fps, dai.VideoEncoderProperties.Profile.MJPEG)
+        enc_rgb.setQuality(95)
+        cam_rgb.video.link(enc_rgb.input)
         
         cam_left = pipeline.create(dai.node.MonoCamera)
         cam_left.setFps(target_fps)
         cam_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
         cam_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
 
+        enc_left = pipeline.create(dai.node.VideoEncoder)
+        enc_left.setDefaultProfilePreset(target_fps, dai.VideoEncoderProperties.Profile.MJPEG)
+        enc_left.setQuality(95)
+        cam_left.video.link(enc_left.input)
+
         cam_right = pipeline.create(dai.node.MonoCamera)
         cam_right.setFps(target_fps)
         cam_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
         cam_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+
+        enc_right = pipeline.create(dai.node.VideoEncoder)
+        enc_right.setDefaultProfilePreset(target_fps, dai.VideoEncoderProperties.Profile.MJPEG)
+        enc_right.setQuality(95)
+        cam_right.video.link(enc_right.input)
 
         # Define Sync Node
         sync = pipeline.create(dai.node.Sync)
         sync.setSyncThreshold(timedelta(milliseconds=15))
 
         # We request the output from the cameras (internal) and link to Sync
-        cam_rgb.video.link(sync.inputs["rgb"])
-        cam_left.out.link(sync.inputs["left"])
-        cam_right.out.link(sync.inputs["right"])
+        enc_rgb.bitstream.link(sync.inputs["rgb"])
+        enc_left.bitstream.link(sync.inputs["left"])
+        enc_right.bitstream.link(sync.inputs["right"])
 
         # We call createOutputQueue directly from the sync node's output port
         syncQueue = sync.out.createOutputQueue()
@@ -101,10 +116,16 @@ def main(args=None):
             # Get the synchronized group
             msg_group = syncQueue.get()
             
-            # Access frames by the keys used in the links
-            f_rgb = msg_group["rgb"].getCvFrame()
-            f_left = msg_group["left"].getCvFrame()
-            f_right = msg_group["right"].getCvFrame()
+            # Extract raw JPEG bytes
+            bytes_rgb = msg_group["rgb"].getData()
+            bytes_left = msg_group["left"].getData()
+            bytes_right = msg_group["right"].getData()
+
+            # Decode JPEG bytes back to OpenCV numpy arrays on the host CPU
+            # RGB will now decode back into a full 1080p (or 4K) array
+            f_rgb = cv2.imdecode(bytes_rgb, cv2.IMREAD_COLOR)
+            f_left = cv2.imdecode(bytes_left, cv2.IMREAD_GRAYSCALE)
+            f_right = cv2.imdecode(bytes_right, cv2.IMREAD_GRAYSCALE)
 
             # Publish!
             cam_node.publish_frames(f_rgb, f_left, f_right)
