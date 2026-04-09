@@ -14,9 +14,9 @@ class CameraPublisher(Node):
         super().__init__('camera_publisher')
 
         # publishers for each stream
-        self.pub_rgb = self.create_publisher(Image, 'vision/camera/rgb', 10)
-        self.pub_left = self.create_publisher(Image, 'vision/camera/left', 10)
-        self.pub_right = self.create_publisher(Image, 'vision/camera/right', 10)
+        self.pub_rgb = self.create_publisher(Image, 'vision/camera/rgb', 1)
+        self.pub_left = self.create_publisher(Image, 'vision/camera/left', 1)
+        self.pub_right = self.create_publisher(Image, 'vision/camera/right', 1)
         
         self.bridge = CvBridge()
 
@@ -49,29 +49,35 @@ def main(args=None):
 
     with dai.Pipeline() as pipeline:
         # Define Camera Nodes
-        cam_rgb = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
-        cam_left = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_B)
-        cam_right = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C)
+        cam_rgb = pipeline.create(dai.node.ColorCamera)
+        cam_rgb.setFps(target_fps)
+        cam_rgb.setBoardSocket(dai.CameraBoardSocket.CAM_A)
+        if MAX_RES:
+            cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
+        else:
+            cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+        
+        cam_left = pipeline.create(dai.node.MonoCamera)
+        cam_left.setFps(target_fps)
+        cam_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
+        cam_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+
+        cam_right = pipeline.create(dai.node.MonoCamera)
+        cam_right.setFps(target_fps)
+        cam_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
+        cam_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
 
         # Define Sync Node
         sync = pipeline.create(dai.node.Sync)
         sync.setSyncThreshold(timedelta(milliseconds=15))
 
         # We request the output from the cameras (internal) and link to Sync
-        if MAX_RES:
-            cam_rgb.requestOutput((4056,3040)).link(sync.inputs["rgb"])
-        else:
-            cam_rgb.requestOutput((1920, 1080)).link(sync.inputs["rgb"])
-        cam_left.requestOutput((1280, 800)).link(sync.inputs["left"])
-        cam_right.requestOutput((1280, 800)).link(sync.inputs["right"])
+        cam_rgb.video.link(sync.inputs["rgb"])
+        cam_left.out.link(sync.inputs["left"])
+        cam_right.out.link(sync.inputs["right"])
 
-        # 5. Create the Synced Output Queue
         # We call createOutputQueue directly from the sync node's output port
         syncQueue = sync.out.createOutputQueue()
-
-        controlQueueRGB = cam_rgb.inputControl.createInputQueue()
-
-        pipeline.start()
 
         # Set manual focus once the pipeline is running
         controlQueueRGB = cam_rgb.inputControl.createInputQueue()
@@ -89,7 +95,7 @@ def main(args=None):
 
         # and, go!
         pipeline.start()
-
+        cam_node.get_logger().info("Starting!")
 
         while pipeline.isRunning():
             # Get the synchronized group
