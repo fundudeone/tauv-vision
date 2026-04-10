@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, CompressedImage
+from sensor_msgs.msg import Image, CompressedImage, CameraInfo
 from cv_bridge import CvBridge
 import cv2
 import depthai as dai
@@ -32,27 +32,40 @@ class CameraPublisher(Node):
 
         # publishers for each stream
         self.pub_rgb = self.create_publisher(Image, 'vision/camera/rgb', qos_profile_sensor_data)
+        self.pub_depth = self.create_publisher(Image, 'vision/camera/depth', qos_profile_sensor_data)
         self.pub_rgb_compressed = self.create_publisher(CompressedImage, 'vision/camera/rgb/compressed', qos_profile_sensor_data)
 
         if SEND_MONOS:
             self.pub_left = self.create_publisher(Image, 'vision/camera/left', qos_profile_sensor_data)
             self.pub_right = self.create_publisher(Image, 'vision/camera/right', qos_profile_sensor_data)
         
+        # info publisher
+        self.pub_info = self.create_publisher(CameraInfo, 'vision/camera/camera_info', qos_profile_sensor_data)
+        self.info = CameraInfo()
+        setup_camera_info()
+
         self.bridge = CvBridge()
 
-    def publish_frames(self, rgb, bytes_rgb, left=None, right=None):
+    def publish_frames(self, rgb, bytes_rgb, depth, left=None, right=None):
+        # Sync timestamps with the current ROS time
+        timestamp = self.get_clock().now().to_msg()
+
         # Convert numpy arrays to ROS 2 Image messages
         # 'bgr8' for color, 'mono8' for grayscale
         msg_rgb = self.bridge.cv2_to_imgmsg(rgb, encoding="bgr8")
+        msg_rgb.header.stamp = timestamp
+        msg_rgb.header.frame_id = "camera_link"
 
-        if SEND_MONOS:
+        # depthmap is unsigned 16 bit ints
+        msg_depth = self.bridge.cv2_to_imgmsg(depth, encoding="16UC1")
+        msg_depth.header.stamp = timestamp
+        msg_depth.header.frame_id = "camera_link"
+
+        send_monos = self.get_parameter('send_monos').value
+
+        if send_monos:
             msg_left = self.bridge.cv2_to_imgmsg(left, encoding="mono8")
             msg_right = self.bridge.cv2_to_imgmsg(right, encoding="mono8")
-
-        # Sync timestamps with the current ROS time
-        timestamp = self.get_clock().now().to_msg()
-        msg_rgb.header.stamp = timestamp
-        if SEND_MONOS:
             msg_left.header.stamp = timestamp
             msg_right.header.stamp = timestamp
 
@@ -64,16 +77,49 @@ class CameraPublisher(Node):
 
         msg_rgb_comp = CompressedImage()
         msg_rgb_comp.header.stamp = timestamp
-        msg_rgb_comp.header.frame_id = "cam_rgb_optical_frame"
+        msg_rgb_comp.header.frame_id = "camera_link"
         msg_rgb_comp.format = "jpeg"
         # DepthAI getData() returns a numpy array. We convert it to a flat list of bytes for ROS 2.
         msg_rgb_comp.data = bytes_rgb.tolist() 
-        self.pub_rgb_compressed.publish(msg_rgb_comp)
         self.pub_rgb.publish(msg_rgb)
+        self.pub_depth.publish(msg_depth)
+        self.pub_rgb_compressed.publish(msg_rgb_comp)
 
         if SEND_MONOS:
             self.pub_left.publish(msg_left)
             self.pub_right.publish(msg_right)
+
+        camera_info_msg.header.stamp = timestamp
+        camera_info_msg.header.frame_id = "camera_link"
+        self.pub_info.publish(camera_info_msg)
+
+def make_rgb_camera_node(pipeline, socket : dai.CameraBoardSocket, target_fps, max_res) -> dai.node.ColorCamera:
+    cam_rgb = pipeline.create(dai.node.ColorCamera)
+    cam_rgb.setFps(target_fps)
+    cam_rgb.setBoardSocket(socket)
+    if max_res:
+        cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
+    else:
+        cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+    cam_rgb.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
+    
+    return cam_rgb
+
+def make_mono_camera_node(pipeline, socket, target_fps) -> dai.node.MonoCamera:
+    cam_mono = pipeline.create(dai.node.MonoCamera)
+    cam_mono.setFps(target_fps)
+    cam_mono.setBoardSocket(socket)
+    cam_mono.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+    cam_mono.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
+    
+    return cam_mono
+
+def make_output_encoder_node(pipeline, cameraNodeOut, format : dai.VideoEncoderProperties.Profile, quality, target_fps) -> dai.node.VideoEncoder:
+    enc_cam = pipeline.create(dai.node.VideoEncoder)
+    enc_cam.setDefaultProfilePreset(target_fps, format)
+    enc_cam.setQuality(quality)
+    cameraNodeOut.link(enc_cam.input)
+    return enc_cam
 
 def main(args=None):
     rclpy.init(args=args)
@@ -81,55 +127,38 @@ def main(args=None):
 
     with dai.Pipeline() as pipeline:
         # Define Camera Nodes
-        cam_rgb = pipeline.create(dai.node.ColorCamera)
-        cam_rgb.setFps(target_fps)
-        cam_rgb.setBoardSocket(dai.CameraBoardSocket.CAM_A)
-        if MAX_RES:
-            cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
-        else:
-            cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-        cam_rgb.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
+        cam_rgb = make_rgb_camera_node(pipeline, dai.CameraBoardSocket.CAM_A, target_fps, max_res)
+        enc_rgb = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
 
-        enc_rgb = pipeline.create(dai.node.VideoEncoder)
-        enc_rgb.setDefaultProfilePreset(target_fps, dai.VideoEncoderProperties.Profile.MJPEG)
-        enc_rgb.setQuality(95)
-        cam_rgb.video.link(enc_rgb.input)
-
-        if SAVE_RGB:
-            enc_h264 = pipeline.create(dai.node.VideoEncoder)
-            enc_h264.setDefaultProfilePreset(target_fps, dai.VideoEncoderProperties.Profile.H264_MAIN)
-            cam_rgb.video.link(enc_h264.input)
+        if save_rgb_video:
+            enc_h264 = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.Profile.H264_MAIN, 95, target_fps)
             saver = pipeline.create(VideoSaver).build(enc_h264.out)
         
-        if SEND_MONOS:
-            cam_left = pipeline.create(dai.node.MonoCamera)
-            cam_left.setFps(target_fps)
-            cam_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
-            cam_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
-            cam_left.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
+        cam_left = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_B, target_fps)
+        cam_right = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_C, target_fps)
+        if send_monos:
+            enc_left = make_output_encoder_node(pipeline, cam_left.out, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
+            enc_right = make_output_encoder_node(pipeline, cam_right.out, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
 
-            enc_left = pipeline.create(dai.node.VideoEncoder)
-            enc_left.setDefaultProfilePreset(target_fps, dai.VideoEncoderProperties.Profile.MJPEG)
-            enc_left.setQuality(95)
-            cam_left.out.link(enc_left.input)
-
-            cam_right = pipeline.create(dai.node.MonoCamera)
-            cam_right.setFps(target_fps)
-            cam_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
-            cam_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
-            cam_right.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
-
-            enc_right = pipeline.create(dai.node.VideoEncoder)
-            enc_right.setDefaultProfilePreset(target_fps, dai.VideoEncoderProperties.Profile.MJPEG)
-            enc_right.setQuality(95)
-            cam_right.out.link(enc_right.input)
+        # Make stereo dpeth node
+        stereo = pipeline.create(dai.node.StereoDepth)
+        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.DENSITY)
+        stereo.initialConfig.setConfidenceThreshold(0)
+        stereo.initialConfig.postProcessing.thresholdFilter.maxRange = 10000
+        stereo.setRectifyEdgeFillColor(0)
+        stereo.enableDistortionCorrection(True)
+        stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A) # Align depth to RGB
+        
+        cam_left.out.link(stereo.left)
+        cam_right.out.link(stereo.right)
 
         # Define Sync Node
         sync = pipeline.create(dai.node.Sync)
         sync.setSyncThreshold(timedelta(milliseconds=15))
 
-        # We request the output from the cameras (internal) and link to Sync
+        # We request the output from the cameras (internal) and generated depthmap and link to Sync
         enc_rgb.bitstream.link(sync.inputs["rgb"])
+        stereo.depth.link(sync.inputs["depth"])
         
         if SEND_MONOS:
             enc_left.bitstream.link(sync.inputs["left"])
@@ -158,7 +187,8 @@ def main(args=None):
 
         # and, go!
         pipeline.start()
-        cam_node.get_logger().info(f"Starting! Target FPS: {target_fps}")
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        cam_node.get_logger().info(f"Starting! Target FPS: {cam_node.get_parameter('target_fps').value}")
 
         try:
             while pipeline.isRunning() and rclpy.ok():
@@ -168,23 +198,27 @@ def main(args=None):
                 # Extract raw JPEG bytes
                 bytes_rgb = msg_group["rgb"].getData()
 
-                if SEND_MONOS:
+                f_depth = msg_group["depth"].getFrame()
+
+                if send_monos:
                     bytes_left = msg_group["left"].getData()
                     bytes_right = msg_group["right"].getData()
 
-                # Decode JPEG bytes back to OpenCV numpy arrays on the host CPU
-                # RGB will now decode back into a full 1080p (or 4K) array
-                f_rgb = cv2.imdecode(bytes_rgb, cv2.IMREAD_COLOR)
+                if send_monos:
+                    # Decode all 3 images simultaneously 
+                    future_rgb = executor.submit(cv2.imdecode, bytes_rgb, cv2.IMREAD_COLOR)
+                    future_left = executor.submit(cv2.imdecode, bytes_left, cv2.IMREAD_GRAYSCALE)
+                    future_right = executor.submit(cv2.imdecode, bytes_right, cv2.IMREAD_GRAYSCALE)
 
-                if SEND_MONOS:
-                    f_left = cv2.imdecode(bytes_left, cv2.IMREAD_GRAYSCALE)
-                    f_right = cv2.imdecode(bytes_right, cv2.IMREAD_GRAYSCALE)
-
-                # Publish!
-                if SEND_MONOS:
-                    cam_node.publish_frames(f_rgb, bytes_rgb, f_left, f_right)
+                    f_rgb = future_rgb.result()
+                    f_left = future_left.result()
+                    f_right = future_right.result()
+                    
+                    # Publish!
+                    cam_node.publish_frames(f_rgb, bytes_rgb, f_depth, f_left, f_right)
                 else:
-                    cam_node.publish_frames(f_rgb, bytes_rgb)
+                    f_rgb = cv2.imdecode(bytes_rgb, cv2.IMREAD_COLOR) 
+                    cam_node.publish_frames(f_rgb, bytes_rgb, f_depth)
 
                 # Spin once to handle any callbacks if necessary
                 rclpy.spin_once(cam_node, timeout_sec=0)
