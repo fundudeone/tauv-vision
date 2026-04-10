@@ -148,21 +148,30 @@ def main(args=None):
             enc_h264 = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.profile.H264_MAIN, 95, target_fps)
             saver = pipeline.create(VideoSaver).build(enc_h264.out)
         
+        cam_left = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_B, target_fps)
+        cam_right = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_C, target_fps)
         if send_monos:
-            cam_left = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_B, target_fps)
             enc_left = make_output_encoder_node(pipeline, cam_left.out, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
-
-            cam_right = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_C, target_fps)
             enc_right = make_output_encoder_node(pipeline, cam_right.out, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
 
         # Define Sync Node
+        # We request the output from the cameras (internal) and generated depthmap and link to Sync
         sync = pipeline.create(dai.node.Sync)
         sync.setSyncThreshold(timedelta(milliseconds=15))
 
-        # We request the output from the cameras (internal) and generated depthmap and link to Sync
+        # Make stereo dpeth node
+        stereo = pipeline.create(dai.node.StereoDepth)
+        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.DENSITY)
+        stereo.initialConfig.setConfidenceThreshold(0)
+        stereo.initialConfig.postProcessing.thresholdFilter.maxRange = 10000
+        stereo.setRectifyEdgeFillColor(0)
+        stereo.enableDistortionCorrection(True)
+        stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A) # Align depth to RGB
         enc_rgb.bitstream.link(sync.inputs["rgb"])
         stereo.depth.link(sync.inputs["depth"])
-        
+        cam_left.out.link(stereo.left)
+        cam_right.out.link(stereo.right)
+
         if send_monos:
             enc_left.bitstream.link(sync.inputs["left"])
             enc_right.bitstream.link(sync.inputs["right"])
