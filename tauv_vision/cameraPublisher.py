@@ -7,12 +7,7 @@ import depthai as dai
 from datetime import timedelta, datetime
 from rclpy.qos import qos_profile_sensor_data
 from pathlib import Path
-
-MAX_RES = False
-SEND_MONOS = False
-SAVE_RGB = True
-target_fps = 10
-
+import concurrent.futures
 
 class VideoSaver(dai.node.HostNode):
     def __init__(self, *args, **kwargs):
@@ -30,12 +25,23 @@ class CameraPublisher(Node):
     def __init__(self):
         super().__init__('camera_publisher')
 
+        # parameters
+        self.declare_parameters(
+            namespace='',
+            parameters=[
+                ('max_res', False), # True = Stream rgb at 4k, False = stream rgb at 1080p
+                ('send_monos', False), # True = Stream and publish raw mono camera outputs, False = don't
+                ('save_rgb_video', True), # True = Save rgb camera output to a video file
+                ('target_fps', 10) # FPS to try to target
+            ]
+        )
+
         # publishers for each stream
         self.pub_rgb = self.create_publisher(Image, 'vision/camera/rgb', qos_profile_sensor_data)
         self.pub_depth = self.create_publisher(Image, 'vision/camera/depth', qos_profile_sensor_data)
         self.pub_rgb_compressed = self.create_publisher(CompressedImage, 'vision/camera/rgb/compressed', qos_profile_sensor_data)
 
-        if SEND_MONOS:
+        if self.get_parameter('send_monos').value:
             self.pub_left = self.create_publisher(Image, 'vision/camera/left', qos_profile_sensor_data)
             self.pub_right = self.create_publisher(Image, 'vision/camera/right', qos_profile_sensor_data)
         
@@ -63,9 +69,16 @@ class CameraPublisher(Node):
 
         send_monos = self.get_parameter('send_monos').value
 
+        send_monos = self.get_parameter('send_monos').value
+
         if send_monos:
             msg_left = self.bridge.cv2_to_imgmsg(left, encoding="mono8")
             msg_right = self.bridge.cv2_to_imgmsg(right, encoding="mono8")
+
+        # Sync timestamps with the current ROS time
+        timestamp = self.get_clock().now().to_msg()
+        msg_rgb.header.stamp = timestamp
+        if send_monos:
             msg_left.header.stamp = timestamp
             msg_right.header.stamp = timestamp
 
@@ -85,13 +98,9 @@ class CameraPublisher(Node):
         self.pub_depth.publish(msg_depth)
         self.pub_rgb_compressed.publish(msg_rgb_comp)
 
-        if SEND_MONOS:
+        if send_monos:
             self.pub_left.publish(msg_left)
             self.pub_right.publish(msg_right)
-
-        camera_info_msg.header.stamp = timestamp
-        camera_info_msg.header.frame_id = "camera_link"
-        self.pub_info.publish(camera_info_msg)
 
 def make_rgb_camera_node(pipeline, socket : dai.CameraBoardSocket, target_fps, max_res) -> dai.node.ColorCamera:
     cam_rgb = pipeline.create(dai.node.ColorCamera)
@@ -126,31 +135,25 @@ def main(args=None):
     cam_node = CameraPublisher()
 
     with dai.Pipeline() as pipeline:
+        target_fps = cam_node.get_parameter('target_fps').value
+        max_res = cam_node.get_parameter('max_res').value
+        send_monos = cam_node.get_parameter('send_monos').value
+        save_rgb_video = cam_node.get_parameter('save_rgb_video').value
+
         # Define Camera Nodes
         cam_rgb = make_rgb_camera_node(pipeline, dai.CameraBoardSocket.CAM_A, target_fps, max_res)
         enc_rgb = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
 
         if save_rgb_video:
-            enc_h264 = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.Profile.H264_MAIN, 95, target_fps)
+            enc_h264 = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.profile.H264_MAIN, 95, target_fps)
             saver = pipeline.create(VideoSaver).build(enc_h264.out)
         
-        cam_left = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_B, target_fps)
-        cam_right = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_C, target_fps)
         if send_monos:
+            cam_left = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_B, target_fps)
             enc_left = make_output_encoder_node(pipeline, cam_left.out, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
-            enc_right = make_output_encoder_node(pipeline, cam_right.out, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
 
-        # Make stereo dpeth node
-        stereo = pipeline.create(dai.node.StereoDepth)
-        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.DENSITY)
-        stereo.initialConfig.setConfidenceThreshold(0)
-        stereo.initialConfig.postProcessing.thresholdFilter.maxRange = 10000
-        stereo.setRectifyEdgeFillColor(0)
-        stereo.enableDistortionCorrection(True)
-        stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A) # Align depth to RGB
-        
-        cam_left.out.link(stereo.left)
-        cam_right.out.link(stereo.right)
+            cam_right = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_C, target_fps)
+            enc_right = make_output_encoder_node(pipeline, cam_right.out, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
 
         # Define Sync Node
         sync = pipeline.create(dai.node.Sync)
@@ -160,34 +163,31 @@ def main(args=None):
         enc_rgb.bitstream.link(sync.inputs["rgb"])
         stereo.depth.link(sync.inputs["depth"])
         
-        if SEND_MONOS:
+        if send_monos:
             enc_left.bitstream.link(sync.inputs["left"])
             enc_right.bitstream.link(sync.inputs["right"])
 
         # We call createOutputQueue directly from the sync node's output port
         syncQueue = sync.out.createOutputQueue()
 
-        # Set manual focus once the pipeline is running
-        controlQueueRGB = cam_rgb.inputControl.createInputQueue()
-
-        if SEND_MONOS:
-            controlQueueLeft = cam_left.inputControl.createInputQueue()
-            controlQueueRight = cam_right.inputControl.createInputQueue()
-
         ctrl = dai.CameraControl()
         ctrl.setManualFocus(130)
         ctrl.setManualExposure(17000, 1400)
         ctrl.setManualWhiteBalance(7000)
 
+        # Set manual focus once the pipeline is running
+        controlQueueRGB = cam_rgb.inputControl.createInputQueue()
         controlQueueRGB.send(ctrl)
 
-        if SEND_MONOS:
+        if send_monos:
+            controlQueueLeft = cam_left.inputControl.createInputQueue()
             controlQueueLeft.send(ctrl)
+            controlQueueRight = cam_right.inputControl.createInputQueue()
             controlQueueRight.send(ctrl)
 
         # and, go!
         pipeline.start()
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         cam_node.get_logger().info(f"Starting! Target FPS: {cam_node.get_parameter('target_fps').value}")
 
         try:
@@ -198,12 +198,11 @@ def main(args=None):
                 # Extract raw JPEG bytes
                 bytes_rgb = msg_group["rgb"].getData()
 
-                f_depth = msg_group["depth"].getFrame()
-
                 if send_monos:
                     bytes_left = msg_group["left"].getData()
                     bytes_right = msg_group["right"].getData()
 
+                # Publish!
                 if send_monos:
                     # Decode all 3 images simultaneously 
                     future_rgb = executor.submit(cv2.imdecode, bytes_rgb, cv2.IMREAD_COLOR)
@@ -214,16 +213,15 @@ def main(args=None):
                     f_left = future_left.result()
                     f_right = future_right.result()
                     
-                    # Publish!
-                    cam_node.publish_frames(f_rgb, bytes_rgb, f_depth, f_left, f_right)
+                    cam_node.publish_frames(f_rgb, bytes_rgb, f_left, f_right)
                 else:
                     f_rgb = cv2.imdecode(bytes_rgb, cv2.IMREAD_COLOR) 
-                    cam_node.publish_frames(f_rgb, bytes_rgb, f_depth)
+                    cam_node.publish_frames(f_rgb, bytes_rgb)
 
                 # Spin once to handle any callbacks if necessary
                 rclpy.spin_once(cam_node, timeout_sec=0)
         finally:
-            if SAVE_RGB:
+            if save_rgb_video:
                 cam_node.get_logger().info("Saving video")
                 saver.file_handle.close()
                 cam_node.get_logger().info("video saved")
