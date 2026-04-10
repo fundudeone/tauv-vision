@@ -8,6 +8,9 @@ from datetime import timedelta, datetime
 from rclpy.qos import qos_profile_sensor_data
 from pathlib import Path
 import concurrent.futures
+from ament_index_python.packages import get_package_share_directory
+import os
+import json
 
 class VideoSaver(dai.node.HostNode):
     def __init__(self, *args, **kwargs):
@@ -48,9 +51,48 @@ class CameraPublisher(Node):
         # info publisher
         self.pub_info = self.create_publisher(CameraInfo, 'vision/camera/camera_info', qos_profile_sensor_data)
         self.info = CameraInfo()
-        setup_camera_info()
+        self.setup_camera_info()
 
         self.bridge = CvBridge()
+
+    def setup_camera_info(self, rgbStreamWidth, rgbStreamHeight):
+        jsonParse = json.loads(os.path.join(
+            get_package_share_directory('tauv_vision'),
+            'configs',
+            'real_factory_calibration_backup.json'
+        ).read_text())
+
+        RGB_CAMERA_INDEX = 2
+        cameraData = jsonParse["cameraData"][RGB_CAMERA_INDEX][1]
+
+        xIntrinsicScale = rgbStreamWidth/cameraData["width"]
+        yIntrinsicScale = rgbStreamHeight/cameraData["height"]
+
+        self.info.width = rgbStreamWidth
+        self.info.height = rgbStreamHeight
+
+        configIntrinsics = cameraData["intrinsicMatrix"]
+        self.info.k = [configIntrinsics[0][0]*xIntrinsicScale, 0, configIntrinsics[0][2]*xIntrinsicScale, 
+                       0, configIntrinsics[1][1]*yIntrinsicScale, configIntrinsics[1][2]*yIntrinsicScale, 
+                       0, 0, 1
+                       ]
+        
+        if cameraData["cameraType"] == 0:
+            self.info.distortion_model = "plumb_bob"
+        elif cameraData["cameraType"] == 1:
+            self.info.distortion_model = "equidistant"
+
+        self.info.d = cameraData["distortionCoeff"]
+
+        # Since depth is already aligned to the RGB, the RGB 'R' is identity.
+        self.info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
+        self.info.p = [
+            self.info.k[0], self.info.k[1], self.info.k[2], 0.0,
+            self.info.k[3], self.info.k[4], self.info.k[5], 0.0,
+            self.info.k[6], self.info.k[7], self.info.k[8], 0.0
+        ]
+
 
     def publish_frames(self, rgb, bytes_rgb, depth, left=None, right=None):
         # Sync timestamps with the current ROS time
@@ -82,16 +124,11 @@ class CameraPublisher(Node):
             msg_left.header.stamp = timestamp
             msg_right.header.stamp = timestamp
 
-        # Add frame IDs for TF2 compatibility
-        # TODO: Implement this with CAD or even camera IMU data
-        # msg_rgb.header.frame_id = "cam_rgb_optical_frame"
-        # msg_left.header.frame_id = "cam_left_optical_frame"
-        # msg_right.header.frame_id = "cam_right_optical_frame"
-
         msg_rgb_comp = CompressedImage()
         msg_rgb_comp.header.stamp = timestamp
         msg_rgb_comp.header.frame_id = "camera_link"
         msg_rgb_comp.format = "jpeg"
+        
         # DepthAI getData() returns a numpy array. We convert it to a flat list of bytes for ROS 2.
         msg_rgb_comp.data = bytes_rgb.tolist() 
         self.pub_rgb.publish(msg_rgb)
@@ -101,6 +138,9 @@ class CameraPublisher(Node):
         if send_monos:
             self.pub_left.publish(msg_left)
             self.pub_right.publish(msg_right)
+        
+        #publish camera info
+        self.pub_info.publish(self.info)
 
 def make_rgb_camera_node(pipeline, socket : dai.CameraBoardSocket, target_fps, max_res) -> dai.node.ColorCamera:
     cam_rgb = pipeline.create(dai.node.ColorCamera)

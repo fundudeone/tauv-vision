@@ -15,7 +15,8 @@ setup(
 
         # Make sure calibrationFiles and weights ends up in a predictable place
         (os.path.join('share', package_name, 'calibrationFiles'), glob('calibrationFiles/*')),
-        (os.path.join('share', package_name, 'weights'), glob('weights/*'))
+        (os.path.join('share', package_name, 'weights'), glob('weights/*')),
+        (os.path.join('share', package_name, 'configs'), glob('configs/*'))
     ],
     install_requires=[
         'setuptools',
