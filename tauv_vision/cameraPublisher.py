@@ -11,11 +11,15 @@ import concurrent.futures
 from ament_index_python.packages import get_package_share_directory
 import os
 import json
+import time
+import collections
+
+BENCHMARKING = False
 
 class VideoSaver(dai.node.HostNode):
     def __init__(self, *args, **kwargs):
         dai.node.HostNode.__init__(self, *args, **kwargs)
-        self.file_handle = open(f"{Path.home()}/video-{datetime.now()}.encoded", 'wb')
+        self.file_handle = open(f"/tauv-mono/videos/video-{datetime.now()}.encoded", 'wb')
 
     def build(self, *args):
         self.link_args(*args)
@@ -50,17 +54,24 @@ class CameraPublisher(Node):
         
         # info publisher
         self.pub_info = self.create_publisher(CameraInfo, 'vision/camera/camera_info', qos_profile_sensor_data)
+        (rgbStreamWidth, rgbStreamHeight) = (3840, 2160) if self.get_parameter('max_res').value else (1920, 1080)
         self.info = CameraInfo()
-        self.setup_camera_info()
+        self.setup_camera_info(rgbStreamWidth, rgbStreamHeight)
 
         self.bridge = CvBridge()
 
+        # benchmarking init
+        self.last_time = time.perf_counter()
+        self.frame_deltas = collections.deque(maxlen=30)
+        self.pub_durations = collections.deque(maxlen=30)
+
     def setup_camera_info(self, rgbStreamWidth, rgbStreamHeight):
-        jsonParse = json.loads(os.path.join(
+        with open(os.path.join(
             get_package_share_directory('tauv_vision'),
             'configs',
             'real_factory_calibration_backup.json'
-        ).read_text())
+        )) as f:
+            jsonParse = json.load(f)
 
         RGB_CAMERA_INDEX = 2
         cameraData = jsonParse["cameraData"][RGB_CAMERA_INDEX][1]
@@ -72,9 +83,9 @@ class CameraPublisher(Node):
         self.info.height = rgbStreamHeight
 
         configIntrinsics = cameraData["intrinsicMatrix"]
-        self.info.k = [configIntrinsics[0][0]*xIntrinsicScale, 0, configIntrinsics[0][2]*xIntrinsicScale, 
-                       0, configIntrinsics[1][1]*yIntrinsicScale, configIntrinsics[1][2]*yIntrinsicScale, 
-                       0, 0, 1
+        self.info.k = [float(configIntrinsics[0][0]*xIntrinsicScale), 0.0, float(configIntrinsics[0][2]*xIntrinsicScale), 
+                       0.0, float(configIntrinsics[1][1]*yIntrinsicScale), float(configIntrinsics[1][2]*yIntrinsicScale), 
+                       0.0, 0.0, 1.0
                        ]
         
         if cameraData["cameraType"] == 0:
@@ -131,6 +142,17 @@ class CameraPublisher(Node):
         
         # DepthAI getData() returns a numpy array. We convert it to a flat list of bytes for ROS 2.
         msg_rgb_comp.data = bytes_rgb.tolist() 
+
+        # benchmarking
+        now = time.perf_counter()
+        delta = now - self.last_time
+        self.frame_deltas.append(delta)
+        self.last_time = now
+
+        pub_start = time.perf_counter()
+        pub_end = time.perf_counter()
+        self.pub_durations.append(pub_end - pub_start)
+
         self.pub_rgb.publish(msg_rgb)
         self.pub_depth.publish(msg_depth)
         self.pub_rgb_compressed.publish(msg_rgb_comp)
@@ -141,6 +163,21 @@ class CameraPublisher(Node):
         
         #publish camera info
         self.pub_info.publish(self.info)
+
+        if BENCHMARKING:
+            self.report_metrics()
+
+    def report_metrics(self):
+        if not self.frame_deltas: return
+        
+        avg_hz = 1.0 / (sum(self.frame_deltas) / len(self.frame_deltas))
+        avg_pub_ms = (sum(self.pub_durations) / len(self.pub_durations)) * 1000
+        
+        self.get_logger().info(
+            f"Internal Rate: {avg_hz:.2f} Hz | "
+            f"Publish Call Latency: {avg_pub_ms:.2f} ms",
+            throttle_duration_sec=1.0
+        )
 
 def make_rgb_camera_node(pipeline, socket : dai.CameraBoardSocket, target_fps, max_res) -> dai.node.ColorCamera:
     cam_rgb = pipeline.create(dai.node.ColorCamera)
@@ -185,7 +222,7 @@ def main(args=None):
         enc_rgb = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.Profile.MJPEG, 95, target_fps)
 
         if save_rgb_video:
-            enc_h264 = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.profile.H264_MAIN, 95, target_fps)
+            enc_h264 = make_output_encoder_node(pipeline, cam_rgb.video, dai.VideoEncoderProperties.Profile.H264_MAIN, 95, target_fps)
             saver = pipeline.create(VideoSaver).build(enc_h264.out)
         
         cam_left = make_mono_camera_node(pipeline, dai.CameraBoardSocket.CAM_B, target_fps)
@@ -247,6 +284,9 @@ def main(args=None):
                 # Extract raw JPEG bytes
                 bytes_rgb = msg_group["rgb"].getData()
 
+                # get raw depthmap
+                f_depth = msg_group["depth"].getFrame()
+
                 if send_monos:
                     bytes_left = msg_group["left"].getData()
                     bytes_right = msg_group["right"].getData()
@@ -262,10 +302,10 @@ def main(args=None):
                     f_left = future_left.result()
                     f_right = future_right.result()
                     
-                    cam_node.publish_frames(f_rgb, bytes_rgb, f_left, f_right)
+                    cam_node.publish_frames(f_rgb, bytes_rgb, f_depth, f_left, f_right)
                 else:
                     f_rgb = cv2.imdecode(bytes_rgb, cv2.IMREAD_COLOR) 
-                    cam_node.publish_frames(f_rgb, bytes_rgb)
+                    cam_node.publish_frames(f_rgb, bytes_rgb, f_depth)
 
                 # Spin once to handle any callbacks if necessary
                 rclpy.spin_once(cam_node, timeout_sec=0)
