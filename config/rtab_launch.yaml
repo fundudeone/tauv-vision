@@ -1,0 +1,13 @@
+oak:
+  ros__parameters:
+    driver:
+      i_ip: "192.168.8.22"
+      i_tf_parent_frame: "base_link"
+      i_tf_cam_roll: 3.14159
+    pipeline_gen:
+      i_enable_imu: false
+      i_publish_tf: false
+      i_config_path: "/tauv-mono/ros_ws/src/tauv_vision/configs/real_factory_calibration_backup.json"
+    rgb:
+      r_set_man_focus: true
+      r_focus: 130
