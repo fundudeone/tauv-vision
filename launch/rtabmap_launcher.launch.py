@@ -21,7 +21,7 @@ def launch_setup(context, *args, **kwargs):
     params_file = LaunchConfiguration("params_file")
     parameters = [
         {
-            "frame_id": "oak_parent_frame",
+            "frame_id": "os/base_link",
             "subscribe_rgb": True,
             "subscribe_depth": True,
             "subscribe_odom_info": False,
@@ -29,6 +29,9 @@ def launch_setup(context, *args, **kwargs):
             # RTAB-Map's parameters should be strings:
             'Mem/NotLinkedNodesKept':'false',
             "Rtabmap/DetectionRate": "1.0",
+            'visual_odometry' : 'false',
+            "RGBD/LinearUpdate": "0.0",
+            "RGBD/AngularUpdate": "0.0",
         }
     ]
 
@@ -47,29 +50,30 @@ def launch_setup(context, *args, **kwargs):
             launch_arguments={"name": name, "params_file": params_file}.items(),
         ),
         Node(
-                    package="rtabmap_slam",
-                    executable="rtabmap",
-                    name="rtabmap",
-                    parameters=parameters,
-                    remappings=remappings,
-        ),
-        Node(
-            package="rtabmap_viz",
-            executable="rtabmap_viz",
-            output="screen",
+            package="rtabmap_slam",
+            executable="rtabmap",
+            name="rtabmap",
             parameters=parameters,
             remappings=remappings,
+            arguments=["--delete_db_on_start"] # delete cached map while testing since its garbage until this works
         ),
+        # extremely annoying hack to make sure that the camera parent transform is just os/base_link
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            # Arguments: x y z yaw pitch roll parent_frame child_frame
+            arguments = ['0', '0', '0', '0', '0', '0', 'os/base_link', 'oak_parent_frame']
+        )
     ]
 
 
 def generate_launch_description():
-    depthai_prefix = get_package_share_directory("depthai_ros_driver_v3")
+    tauv_vision_prefix = get_package_share_directory("tauv_vision")
     declared_arguments = [
         DeclareLaunchArgument("name", default_value="oak"),
         DeclareLaunchArgument(
             "params_file",
-            default_value=os.path.join(depthai_prefix, "config", "rtabmap.yaml"),
+            default_value=os.path.join(tauv_vision_prefix, "config", "rtab_launch.yaml"),
         ),
     ]
 
