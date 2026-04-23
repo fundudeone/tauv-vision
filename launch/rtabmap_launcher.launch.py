@@ -19,6 +19,7 @@ def launch_setup(context, *args, **kwargs):
     depthai_prefix = get_package_share_directory("depthai_ros_driver_v3")
 
     params_file = LaunchConfiguration("params_file")
+
     parameters = [
         {
             "frame_id": "os/base_link",
@@ -28,10 +29,15 @@ def launch_setup(context, *args, **kwargs):
             "approx_sync": True,
             # RTAB-Map's parameters should be strings:
             'Mem/NotLinkedNodesKept':'false',
-            "Rtabmap/DetectionRate": "1.0",
+            "Mem/RehearsalSimilarity": "0.85",
+            "Rtabmap/DetectionRate": "3.0",
             'visual_odometry' : 'false',
             "RGBD/LinearUpdate": "0.0",
             "RGBD/AngularUpdate": "0.0",
+            "cloud_voxel_size": "0.01",       # lower = denser (default is 0.05)
+            "cloud_decimation": "4",          # sample every Nth pixel
+            "Proj/MaxDepth": "3.5",           # cap depth to where stereo is actually reliable
+            "Proj/MinDepth": "0.3",           # ignore points too close for stereo to resolve
         }
     ]
 
@@ -62,7 +68,7 @@ def launch_setup(context, *args, **kwargs):
             package='tf2_ros',
             executable='static_transform_publisher',
             # Arguments: x y z yaw pitch roll parent_frame child_frame
-            arguments = ['0', '0', '0', '0', '0', '0', 'os/base_link', 'oak_parent_frame']
+            arguments = ['0', '0', '0', '0', '3.141592', '0', 'os/base_link', 'oak_parent_frame']
         )
     ]
 

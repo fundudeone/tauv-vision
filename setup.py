@@ -38,7 +38,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'cameraPublisher = tauv_vision.cameraPublisher:main'
+            'cameraPublisher = tauv_vision.cameraPublisher:main',
+            'CameraInfoFixer = tauv_vision.CameraInfoFixer:main'
         ],
     },
 )
