@@ -7,17 +7,18 @@ oak:
     pipeline_gen:
       i_enable_imu: false
       i_publish_tf: true
-      i_external_calibration_path: "/tauv-mono/ros_ws/src/tauv_vision/configs/inAirManual.json"
+      i_external_calibration_path: "/tauv-mono/ros_ws/src/tauv_vision/configs/underwater_calib.json"
       i_child_frame_id : "oak"
     rgb:
       r_set_man_focus: true
       r_focus: 130
-      i_fps: 15.0
+      i_fps: 10.0
     stereo:
-      i_fps: 15.0
+      i_fps: 10.0
       i_aligned: true
       i_board_socket_id: 0
       i_subpixel: true
       i_subpixel_fractional_bits: 4
-      i_stereo_conf_threshold: 150
-      i_enable_spatial_filter: true
+      i_stereo_conf_threshold: 170
+      i_publish_left_rect: true
+      i_publish_right_rect: true
