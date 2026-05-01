@@ -31,20 +31,32 @@ def launch_setup(context, *args, **kwargs):
             "odom_frame_id": "odom",
             "publish_tf": True,
 
-            "Kp/DetectorStrategy": "1",   # SIFT = 1
-            "Vis/FeatureType": "1",
+            "Kp/DetectorStrategy": "0",   # SIFT = 1
+            "Vis/FeatureType": "0",
             "Kp/MaxFeatures": "1000",
             
             'Mem/NotLinkedNodesKept':'false',
-            "Mem/RehearsalSimilarity": "0.85",
-            "Rtabmap/DetectionRate": "1.0",
+            "Mem/RehearsalSimilarity": "0.6",
+            "Rtabmap/DetectionRate": "0.5",
             'visual_odometry' : 'false',
-            "RGBD/LinearUpdate": "0.0",
-            "RGBD/AngularUpdate": "0.0",
-            "cloud_voxel_size": "0.02",       # lower = denser (default is 0.05)
+            "RGBD/LinearUpdate": "0.1",
+            "RGBD/AngularUpdate": "0.1",
+            "cloud_voxel_size": "0.05",       # lower = denser (default is 0.05)
             "cloud_decimation": "2",          # sample every Nth pixel
-            "Proj/MaxDepth": "3.5",           # cap depth to where stereo is actually reliable
+            "Proj/MaxDepth": "2.0",           # cap depth to where stereo is actually reliable
             "Proj/MinDepth": "0.3",           # ignore points too close for stereo to resolve
+
+            "Reg/Strategy" :"2",
+            "Icp/PointToPlane" : "true",
+            "Icp/Iterations" : "100",
+            "Icp/MaxCorrespondenceDistance": "0.3",
+            "Icp/VoxelSize": "0.025",
+
+            "SURF/GpuVersion": "true",
+
+            # "SIFT/NFeatures": "1000",         # extract more candidates
+            # "SIFT/ContrastThreshold": "0.02", # default 0.04, lower = keep more low-contrast features
+            # "SIFT/EdgeThreshold": "20",       # default 10, higher = keep more edge-like features
         }
     ]
 
