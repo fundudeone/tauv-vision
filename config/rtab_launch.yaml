@@ -21,12 +21,12 @@ oak:
       i_depth_preset: "HIGH_DETAIL"
       i_subpixel: true
       i_subpixel_fractional_bits: 4
-      i_stereo_conf_threshold: 130
+      i_stereo_conf_threshold: 70
       i_publish_left_rect: true
       i_publish_right_rect: true
       i_enable_threshold_filter: true
       i_threshold_filter_min_range: 300
-      i_threshold_filter_max_range: 2000
+      i_threshold_filter_max_range: 4000
     left:
       i_publish_topic: true
       i_fps: 5.0
