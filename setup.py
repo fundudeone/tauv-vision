@@ -18,13 +18,17 @@ setup(
         (os.path.join('share', package_name, 'weights'), glob('weights/*')),
         (os.path.join('share', package_name, 'configs'), glob('configs/*')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
+        # YOLO weights, so nodes can resolve them via get_package_share_directory
+        (os.path.join('share', package_name, 'models'), glob('models/*')),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
     ],
     install_requires=[
         'setuptools',
         'numpy',
         'opencv-python',
-        'cv_bridge'
+        'cv_bridge',
+        'ultralytics',
+        'filterpy'
     ],
     zip_safe=True,
     maintainer='Nicolas Frazier',
@@ -39,7 +43,9 @@ setup(
     entry_points={
         'console_scripts': [
             'cameraPublisher = tauv_vision.cameraPublisher:main',
-            'CameraInfoFixer = tauv_vision.CameraInfoFixer:main'
+            'CameraInfoFixer = tauv_vision.CameraInfoFixer:main',
+            'bannerTask = tauv_vision.bannerTask:main',
+            'tfStaticFromBag = tauv_vision.tfStaticFromBag:main'
         ],
     },
 )
