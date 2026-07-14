@@ -16,6 +16,7 @@
   <exec_depend>message_filters</exec_depend>
   <exec_depend>image_transport</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend>
+  <exec_depend>rtabmap_slam</exec_depend>
 
   <depend>cv_bridge</depend>
 

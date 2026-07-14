@@ -1,0 +1,56 @@
+/**:
+  ros__parameters:
+    frame_id: "os/base_link"
+    odom_frame_id: "odom"
+    map_frame_id: "map"
+
+    subscribe_rgb: true
+    subscribe_depth: true
+    subscribe_odom_info: false
+    approx_sync: true
+
+    # We publish the map -> odom correction (not our own odometry) so the
+    # EKF's drift gets corrected against the mapped geometry over time.
+    publish_tf: true
+    visual_odometry: false
+
+    # In-memory database only — nothing is ever written to disk.
+    database_path: ""
+
+    # Throttle rtabmap's own graph/map updates to 1 Hz. The camera and the
+    # EKF odometry it consumes keep running at their native rates; frames
+    # arriving between detections are simply not turned into map nodes.
+    Rtabmap/DetectionRate: "1.0"
+
+    # Reg/Strategy=2 (Vis+Icp): visual features propose a candidate
+    # match/loop-closure, then ICP geometrically verifies and refines it.
+    # Underwater, color/contrast shifts with depth and turbidity, so visual
+    # appearance alone is not trustworthy for verification -- ICP acceptance
+    # is tightened below to make geometry the deciding factor.
+    Reg/Strategy: "2"
+    Vis/MinInliers: "20"
+    Icp/PointToPlane: "true"
+    Icp/Iterations: "100"
+    Icp/MaxCorrespondenceDistance: "0.3"
+    Icp/VoxelSize: "0.025"
+    Icp/CorrespondenceRatio: "0.3"  # default 0.1 -- raised to require more geometric overlap before accepting a match
+
+    # ORB: patent-free (no OpenCV nonfree build required, unlike SURF/SIFT),
+    # low CPU overhead, and ORB/Gpu below transparently uses CUDA when
+    # available (osprey/Jetson) and falls back to CPU otherwise
+    # (desktop_nogpu) -- same config works unmodified on both containers.
+    Kp/DetectorStrategy: "2"
+    Vis/FeatureType: "2"
+    Kp/MaxFeatures: "1000"
+    ORB/Gpu: "true"
+
+    Mem/NotLinkedNodesKept: "false"
+    Mem/RehearsalSimilarity: "0.6"
+
+    RGBD/LinearUpdate: "0.1"
+    RGBD/AngularUpdate: "0.1"
+
+    cloud_voxel_size: "0.05"   # lower = denser
+    cloud_decimation: "2"      # sample every Nth pixel
+    Proj/MaxDepth: "2.0"       # cap depth to where the stereo depth is actually reliable
+    Proj/MinDepth: "0.3"       # ignore points too close for stereo to resolve
