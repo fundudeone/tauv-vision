@@ -20,7 +20,7 @@
     # Throttle rtabmap's own graph/map updates to 1 Hz. The camera and the
     # EKF odometry it consumes keep running at their native rates; frames
     # arriving between detections are simply not turned into map nodes.
-    Rtabmap/DetectionRate: "1.0"
+    Rtabmap/DetectionRate: "2.0"
 
     # Reg/Strategy=2 (Vis+Icp): visual features propose a candidate
     # match/loop-closure, then ICP geometrically verifies and refines it.
@@ -52,5 +52,5 @@
 
     cloud_voxel_size: "0.05"   # lower = denser
     cloud_decimation: "2"      # sample every Nth pixel
-    Proj/MaxDepth: "2.0"       # cap depth to where the stereo depth is actually reliable
+    Proj/MaxDepth: "3.0"       # cap depth to where the stereo depth is actually reliable
     Proj/MinDepth: "0.3"       # ignore points too close for stereo to resolve

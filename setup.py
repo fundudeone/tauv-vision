@@ -45,6 +45,7 @@ setup(
             'cameraPublisher = tauv_vision.cameraPublisher:main',
             'CameraInfoFixer = tauv_vision.CameraInfoFixer:main',
             'bannerTask = tauv_vision.bannerTask:main',
+            'slalomTask = tauv_vision.slalomTask:main',
             'tfStaticFromBag = tauv_vision.tfStaticFromBag:main'
         ],
     },
